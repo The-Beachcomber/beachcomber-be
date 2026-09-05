@@ -1,0 +1,720 @@
+# OpenAPI 規格 — 需求規格化 Agent 後端中介層
+#
+# （Swagger UI、前端 client 產生器、契約測試）。
+# 服務可運行時 FastAPI 會在 /openapi.json 自動輸出等價內容；
+
+openapi: 3.1.0
+
+info:
+  title: Spec Agent Middleware
+  version: 0.2.0
+  summary: 需求規格化 Agent 的後端中介層
+  description: |
+    React 前端 ←→ 本層（中介）←→ Hermes-agent (LLM) → GCS
+
+    ## 四個情境
+
+    1. `POST /api/meetings` — 建立 LLM 會話（同步）
+    2. `POST /api/meetings/{id}/transcript` — 逐字稿 → 建議問題（同步）
+    3. `POST /api/meetings/{id}/prototypes` — 全逐字稿 → 原型頁面（同步）
+    4. `POST /api/meetings/{id}/specs` — 選定角色 → 規格文件（同步）
+
+    ## MVP 範圍
+
+    本版不收知識包／角色包（`.pak`）。領域知識、角色定義與分析方法
+    皆已在 LLM 端設定完成，本層只負責會話、逐字稿與產出落檔。
+    待包機制重新啟用時，會以新增欄位的方式回填，不改動既有欄位語意。
+
+servers:
+  - url: http://localhost:8000
+    description: 本機開發（./run.sh，LLM_MODE=mock）
+
+tags:
+  - name: health
+    description: 存活與環境資訊
+  - name: meetings
+    description: 情境 1 — 會議建立與讀取
+  - name: transcript
+    description: 情境 2 — 逐字稿與建議問題（同步）
+  - name: prototypes
+    description: 情境 3 — 原型頁面
+  - name: specs
+    description: 情境 4 — 角色規格文件
+
+paths:
+  /api/health:
+    get:
+      tags: [health]
+      summary: 存活檢查
+      description: 回報服務狀態、目前的 LLM 模式與落檔根目錄。
+      operationId: health
+      responses:
+        "200":
+          description: 服務正常
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/meetings:
+    post:
+      tags: [meetings]
+      summary: 情境 1 — 建立會議
+      description: |
+        同步執行，因為建立 LLM session 不做內容生成，耗時短。
+
+        MVP 不上傳任何 `.pak`。領域知識已在 LLM 端設定完成，本端點只需
+        會議名稱即可建立會話；不帶 body 也可以，此時使用預設名稱。
+
+        角色在情境 4 才選定。
+
+        **前端請以 `meeting_id` 為主鍵。** `llm_session_id` 可能因 LLM 端重啟
+        而更換，屆時由本層重建並重新對應，前端無須感知。
+      operationId: createMeeting
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMeetingRequest"
+      responses:
+        "201":
+          description: 會議已建立
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeetingCreated"
+
+  /api/meetings/{meeting_id}:
+    get:
+      tags: [meetings]
+      summary: 讀取會議 metadata、輪次索引與任務清單
+      operationId: getMeeting
+      parameters:
+        - $ref: "#/components/parameters/MeetingId"
+      responses:
+        "200":
+          description: 會議資訊
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Meeting"
+
+  /api/meetings/{meeting_id}/transcript:
+    post:
+      tags: [transcript]
+      summary: 情境 2 — 送出逐字稿，直接取回建議問題
+      description: |
+        同步執行。逐字稿立即落檔，問題生成完成後於同一個回應中回傳。
+
+        `text` 為會議開始至發出請求時的最新語音內容。既有問題由中介層
+        自動帶入上一輪且必須儲存在中介層中，前端不需傳送，也不需保存。
+      operationId: submitTranscript
+      parameters:
+        - $ref: "#/components/parameters/MeetingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TranscriptRequest"
+      responses:
+        "200":
+          description: 逐字稿已落檔，回傳最新被產出的建議問題，並且必須在server端儲存questions做接下來LLM產出所需
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionsRound"
+    get:
+      tags: [transcript]
+      summary: 讀取全部逐字稿
+      operationId: getTranscript
+      parameters:
+        - $ref: "#/components/parameters/MeetingId"
+      responses:
+        "200":
+          description: 逐字稿分段與合併全文
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transcript"
+
+  /api/meetings/{meeting_id}/prototypes:
+    post:
+      tags: [prototypes]
+      summary: 情境 3 — 由全部逐字稿產出原型頁面
+      description: |
+        每頁LLM產出一個原型頁面，預估約 120 秒，建議在正式Demo前進行預作業來讓前端有網址可以進行渲染
+      operationId: generatePrototypes
+      parameters:
+        - $ref: "#/components/parameters/MeetingId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrototypeRequest"
+      responses:
+        "200":
+          description: 取得prototype產出的網址
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrototypeAccepted"
+              example:
+                prototypes: "https://your-domain.com/prototypes/abc123/index.html"
+
+  /api/meetings/{meeting_id}/specs:
+    post:
+      tags: [specs]
+      summary: 情境 4 — 逐一產出指定角色的規格文件
+      description: |
+        角色定義已在 LLM 端設定完成，此處只送出要產出的 role_id。
+      operationId: generateSpecs
+      parameters:
+        - $ref: "#/components/parameters/MeetingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpecRoleForm"
+      responses:
+        "200":
+          description: 每個角色各一份規格文件，回傳可直接渲染的網址
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpecAccepted"
+              example:
+                data:
+                  [
+                    {
+                      "role": "pm",
+                      "spec": "https://your-domain.com/specs/abc123/pm.html",
+                    },
+                    {
+                      "role": "ui",
+                      "spec": "https://your-domain.com/specs/abc123/ui.html",
+                    },
+                  ]
+  /api/meetings/{meeting_id}/{bucket}/{n}:
+    get:
+      tags: [meetings]
+      summary: 讀取指定輪次的原始產出
+      description: |
+        輪次為單調遞增整數，自 1 起，不分支。
+
+        任務為記憶體物件，服務重啟後 `GET /api/jobs/{id}` 會失效，
+        但已完成的產出仍可由本端點取得。
+      operationId: getRound
+      parameters:
+        - $ref: "#/components/parameters/MeetingId"
+        - name: bucket
+          in: path
+          required: true
+          description: 產出類型
+          schema:
+            $ref: "#/components/schemas/Bucket"
+        - name: n
+          in: path
+          required: true
+          description: 輪次，自 1 起
+          schema:
+            type: integer
+            minimum: 1
+          example: 1
+      responses:
+        "200":
+          description: 該輪次的完整落檔內容
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/QuestionsRound"
+                  - $ref: "#/components/schemas/PrototypesRound"
+                  - $ref: "#/components/schemas/SpecsRound"
+        "404":
+          description: 會議、產出類型或輪次不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPError"
+
+components:
+  parameters:
+    MeetingId:
+      name: meeting_id
+      in: path
+      required: true
+      description: 格式 `${YYYY_MM_DD_HHMM}_${STASH}`，時間部分為會議開始時間，不隨後續請求重算。
+      schema:
+        type: string
+        pattern: "^\\d{4}_\\d{2}_\\d{2}_\\d{4}_[0-9a-f]{8}$"
+      example: "2026_09_05_1420_a3f9c2e1"
+
+  responses:
+    NotFound:
+      description: 會議不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HTTPError"
+          example:
+            detail: "找不到會議 2026_09_05_1420_a3f9c2e1"
+    Unprocessable:
+      description: 請求內容無法處理，`detail` 說明原因與可行的修正
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HTTPError"
+
+  schemas:
+    HTTPError:
+      type: object
+      description: FastAPI 預設錯誤格式。`detail` 為面向使用者的中文訊息。
+      properties:
+        detail:
+          description: 說明發生什麼與可以怎麼辦
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+      required: [detail]
+
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          const: ok
+        llm_mode:
+          type: string
+          enum: [mock, hermes]
+          description: mock 不需 Hermes，供前端平行開發與 Demo 備援
+        storage_root:
+          type: string
+          description: 落檔根目錄的絕對路徑
+      required: [status, llm_mode, storage_root]
+      example:
+        status: ok
+        llm_mode: mock
+        storage_root: "/abs/path/storage"
+
+    Bucket:
+      type: string
+      description: 落檔的產出類型。`questions` 僅供稽核回讀，不會出現在 job。
+      enum: [questions, prototypes, specs]
+
+    JobKind:
+      type: string
+      description: 背景任務類型。情境 2 為同步，不建立任務。
+      enum: [prototypes, specs]
+
+    Finding:
+      type: object
+      description: 顯示給前端的單一建議問題。
+      properties:
+        question:
+          type: string
+          description: 建議問題文字（情境 2）
+      examples:
+        - question: "你提到主題要選「AI 會議助理」。評分表上的「完成度」要求現場跑通完整流程，36 小時內要做到哪一段才算可展示？"
+
+    CreateMeetingRequest:
+      type: object
+      description: MVP 不收知識包，僅會議名稱。整個 body 可省略。
+      properties:
+        title:
+          type: string
+          description: 會議名稱，留空時為「未命名需求會議」
+          default: ""
+      example:
+        title: "黑客松主題選擇會議"
+
+
+    MeetingCreated:
+      type: object
+      properties:
+        meeting_id:
+          type: string
+        llm_session_id:
+          type: string
+          description: 非主鍵。LLM 端重啟時由中介層重建並重新對應。
+        title:
+          type: string
+      required: [meeting_id, llm_session_id, title]
+      example:
+        meeting_id: "2026_09_05_1420_a3f9c2e1"
+        llm_session_id: "sess_c9b10d66951d4523"
+        title: "黑客松主題選擇會議"
+
+    Meeting:
+      type: object
+      description: meeting.json 的內容，加上逐字稿段數、輪次索引與任務清單。
+      properties:
+        meeting_id:
+          type: string
+        llm_session_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        title:
+          type: string
+        transcript_segments:
+          type: integer
+        rounds:
+          type: object
+          description: 各產出類型已有的輪次編號
+          properties:
+            questions:
+              type: array
+              items:
+                type: integer
+            prototypes:
+              type: array
+              items:
+                type: integer
+            specs:
+              type: array
+              items:
+                type: integer
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+      required:
+        [
+          meeting_id,
+          llm_session_id,
+          created_at,
+          title,
+          transcript_segments,
+          rounds,
+          jobs,
+        ]
+
+    TranscriptRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          description: 會議開始至發出請求時的最新語音內容
+      required: [text]
+      example:
+        text: "我們黑客松的主題該怎麼選？"
+
+    TranscriptSegment:
+      type: object
+      properties:
+        seq:
+          type: integer
+        text:
+          type: string
+        at:
+          type: string
+          format: date-time
+      required: [seq, text, at]
+
+    Transcript:
+      type: object
+      properties:
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TranscriptSegment"
+        text:
+          type: string
+          description: 全部片段合併後的全文，送 LLM 時使用
+      required: [segments, text]
+
+    PagePlan:
+      type: object
+      properties:
+        page_id:
+          type: string
+          examples: ["P-01"]
+        label:
+          type: string
+          examples: ["黑客松主題選擇流程"]
+      required: [page_id]
+
+    PrototypeRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          description: 全部逐字稿合併後的全文，送 LLM 時使用
+      example:
+        text: ""
+
+    SpecRoleForm:
+      type: object
+      properties:
+        roles:
+          type: string
+          description: 逗號分隔的 role_id，必填
+          examples: ["pm,ui"]
+      required: [roles]
+
+    JobAccepted:
+      type: object
+      properties:
+        job_id:
+          type: string
+        meeting_id:
+          type: string
+        poll:
+          type: string
+          description: 輪詢路徑，建議間隔 2–3 秒
+        estimated_seconds:
+          type: integer
+          description: 預估耗時，供前端估算進度條
+      required: [job_id, meeting_id, poll, estimated_seconds]
+
+    PrototypeAccepted:
+      allOf:
+        - type: object
+          properties:
+            prototypes:
+              type: string
+              description: 本次產出的頁面的GCS路由
+          required: [prototypes]
+
+    SpecResult:
+      type: object
+      description: 單一角色的規格產出。
+      properties:
+        role:
+          type: string
+          description: 角色 id
+          examples: ["ui"]
+        spec:
+          type: string
+          format: uri
+          description: 該角色規格文件的 HTML 網址，可直接渲染
+          examples: ["https://your-domain.com/specs/abc123/ui.html"]
+      required: [role, spec]
+
+    SpecAccepted:
+      type: object
+      properties:
+        data:
+          type: array
+          description: 與請求的 roles 同順序，一個角色一筆
+          items:
+            $ref: "#/components/schemas/SpecResult"
+      required: [data]
+
+    JobItem:
+      type: object
+      description: |
+        任務中的單一項目。單項失敗不中斷整個任務：
+        該項標為 `failed` 並帶 `error`，其餘照常完成。
+      properties:
+        key:
+          type: string
+          description: 情境 3 為 page_id；情境 4 為 role_id
+        label:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, done, failed]
+        url:
+          type: [string, "null"]
+          format: uri
+          description: 完成時的產出網址，可先行渲染
+        error:
+          type: [string, "null"]
+      required: [key, status]
+
+    Progress:
+      type: object
+      properties:
+        done:
+          type: integer
+        total:
+          type: integer
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+      required: [done, total, percent]
+
+    Job:
+      type: object
+      properties:
+        job_id:
+          type: string
+        meeting_id:
+          type: string
+        kind:
+          $ref: "#/components/schemas/JobKind"
+        status:
+          type: string
+          description: |
+            `queued` 已建立未開始 / `running` 執行中尚無項目完成 /
+            `partial` 部分完成，可先渲染 / `done` 全部結束，`result` 有值 /
+            `failed` 全部項目失敗或發生未預期例外
+          enum: [queued, running, partial, done, failed]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobItem"
+        progress:
+          $ref: "#/components/schemas/Progress"
+        result:
+          description: 僅在 `status` 為 `done` 時有值，內容依 `kind` 而定
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/PrototypesRound"
+            - $ref: "#/components/schemas/SpecsRound"
+        error:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        [
+          job_id,
+          meeting_id,
+          kind,
+          status,
+          items,
+          progress,
+          created_at,
+          updated_at,
+        ]
+      example:
+        job_id: "9d3f1c04ab72"
+        meeting_id: "2026_09_05_1420_a3f9c2e1"
+        kind: prototypes
+        status: partial
+        items:
+          - key: "P-01"
+            label: "黑客松主題選擇流程"
+            status: done
+            url: "https://storage.googleapis.com/spec-agent-demo/P-01.html"
+            error: null
+          - key: "P-03"
+            label: "題目評分比較表"
+            status: running
+            url: null
+            error: null
+        progress:
+          done: 2
+          total: 4
+          percent: 50
+        result: null
+        error: null
+        created_at: "2026-09-05T14:22:10"
+        updated_at: "2026-09-05T14:24:40"
+
+    RoundBase:
+      type: object
+      properties:
+        round:
+          type: integer
+          description: 單調遞增，自 1 起，不分支
+        created_at:
+          type: string
+          format: date-time
+        path:
+          type: string
+          description: 落檔相對路徑
+      required: [round]
+
+    QuestionsRound:
+      allOf:
+        # - $ref: "#/components/schemas/RoundBase"
+        - type: object
+          properties:
+            questions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Finding"
+          required: [questions]
+
+    PrototypeItem:
+      type: object
+      properties:
+        page_id:
+          type: string
+        label:
+          type: [string, "null"]
+        url:
+          type: string
+          format: uri
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
+      required: [page_id, url, findings]
+
+    PrototypesRound:
+      allOf:
+        - $ref: "#/components/schemas/RoundBase"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PrototypeItem"
+            findings:
+              type: array
+              description: 全部頁面的 findings 併集
+              items:
+                $ref: "#/components/schemas/Finding"
+            urls:
+              type: array
+              items:
+                type: string
+                format: uri
+          required: [items, findings, urls]
+
+    SpecItem:
+      type: object
+      properties:
+        role_id:
+          type: string
+        label:
+          type: string
+        url:
+          type: string
+          format: uri
+        owned_atoms:
+          type: array
+          description: 此角色 owner 的原子 id
+          items:
+            type: string
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
+        blocking_notices:
+          type: array
+          description: 所有 verified 且 blocked 的 finding，對每個角色都相同（不變式 I6）。
+          items:
+            $ref: "#/components/schemas/Finding"
+      required: [role_id, label, url, findings]
+
+    SpecsRound:
+      allOf:
+        - $ref: "#/components/schemas/RoundBase"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/SpecItem"
+            urls:
+              type: array
+              items:
+                type: string
+                format: uri
+          required: [items, urls]
