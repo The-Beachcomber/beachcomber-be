@@ -1,5 +1,9 @@
 # beachcomber-be
 
+> 這是 Beachcomber 作品的後端。作品說明、架構圖與展示連結見主 repo
+> [`beachcomber-fe`](https://github.com/The-Beachcomber/beachcomber-fe)；
+> AI 服務層在 [`hackathon-hermes`](https://github.com/The-Beachcomber/hackathon-hermes)。
+
 `beachcomber-fe` 與 Hermes 之間的橋接後端。收前端的逐字稿，打 Hermes，把回來的東西轉成前端要的形狀 —— 訪談中產「接下來該追問什麼」，訪談後產「可以點的 HTML Prototype」與四份角色 Spec。
 
 **給前端串接的人看這份**：[`docs/api-contract.md`](docs/api-contract.md)
