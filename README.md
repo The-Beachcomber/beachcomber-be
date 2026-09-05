@@ -31,7 +31,9 @@ uv run uvicorn main:app --reload --port 8000
 | `POST /api/meetings/{id}/prototypes` | `{ text }` | 一個 HTML 公開網址 | 20～40 秒 |
 | `POST /api/meetings/{id}/specs` | `{ roles }` | 四份 Markdown 公開網址 | 63～68 秒 |
 
-錯誤碼三支共用同一套：`422` 參數不合格（缺欄位／角色不認得／逐字稿超過 50,000 字元）、`502` Hermes 回非 2xx 或跑完沒產出（`detail` 附原因）、`503` Hermes 忙碌重試耗盡、`504` 連不上或逾時。
+錯誤碼三支共用同一套：`422` 參數不合格、`502` Hermes 回非 2xx 或跑完沒產出（`detail` 附原因）、`503` Hermes 忙碌重試耗盡、`504` 連不上或逾時。
+
+`422` 的條件各支不同：追問與 Prototype 是缺 `text`；Spec 是角色不認得、或這個 `meeting_id` 底下沒有逐字稿可用、或 `transcript` 超過 `SPEC_TRANSCRIPT_LIMIT`（預設 50,000 字元）。**長度上限只加在 Spec 這支**，另外兩支不檢查逐字稿長度。
 
 ### 追問問題
 
