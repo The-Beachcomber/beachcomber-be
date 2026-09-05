@@ -1,0 +1,19 @@
+[project]
+name = "beachcomber-be"
+version = "0.1.0"
+description = "Bridge API between beachcomber-fe and Hermes"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.9.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+addopts = "--ignore=.venv"
